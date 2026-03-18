@@ -22,6 +22,17 @@ export interface BirdseyeConfig {
 
 export interface FaceRecognitionConfig {
   enabled: boolean;
+  detector: {
+    path?: string | null;
+    model_type: "yunet" | "dfine" | "rfdetr" | "yolox" | "yolonas" | "yolo-generic";
+    width: number;
+    height: number;
+    input_tensor: "nhwc" | "nchw" | "hwnc" | "hwcn";
+    input_pixel_format: "rgb" | "bgr" | "yuv";
+    input_dtype: "float" | "float_denorm" | "int";
+    class_id: number;
+    device?: string | null;
+  };
   model_size: SearchModelSize;
   unknown_score: number;
   detection_threshold: number;

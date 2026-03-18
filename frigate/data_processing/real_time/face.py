@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,12 +20,24 @@ from frigate.comms.event_metadata_updater import (
 )
 from frigate.comms.inter_process import InterProcessRequestor
 from frigate.config import FrigateConfig
+from frigate.config.classification import (
+    FaceDetectionModelConfig,
+    FaceDetectionModelTypeEnum,
+)
 from frigate.const import FACE_DIR, MODEL_CACHE_DIR
 from frigate.data_processing.common.face.model import (
     ArcFaceRecognizer,
     FaceNetRecognizer,
     FaceRecognizer,
 )
+from frigate.detectors import ModelConfig
+from frigate.detectors.detector_config import (
+    InputDTypeEnum,
+    ModelTypeEnum,
+    PixelFormatEnum,
+)
+from frigate.detectors.plugins.onnx import ONNXDetector, ONNXDetectorConfig
+from frigate.object_detection.util import tensor_transform
 from frigate.types import TrackedObjectUpdateTypesEnum
 from frigate.util.builtin import EventsPerSecond, InferenceSpeed
 from frigate.util.image import area
@@ -40,6 +53,163 @@ MAX_FACES_ATTEMPTS_AFTER_REC = 6
 MAX_FACE_ATTEMPTS = 12
 
 
+class FaceDetectorApi(ABC):
+    @abstractmethod
+    def detect(
+        self, input_frame: np.ndarray, threshold: float
+    ) -> tuple[int, int, int, int] | None:
+        pass
+
+
+class YuNetFaceDetector(FaceDetectorApi):
+    def __init__(self, model_path: str):
+        self.face_detector = cv2.FaceDetectorYN.create(
+            model_path,
+            config="",
+            input_size=(320, 320),
+            score_threshold=0.5,
+            nms_threshold=0.3,
+        )
+
+    def detect(
+        self, input_frame: np.ndarray, threshold: float
+    ) -> tuple[int, int, int, int] | None:
+        # YN face detector fails at extreme definitions.
+        # Rescale to a size that properly detects faces while retaining detail.
+        if input_frame.shape[0] > MAX_DETECTION_HEIGHT:
+            scale_factor = MAX_DETECTION_HEIGHT / input_frame.shape[0]
+            new_width = int(scale_factor * input_frame.shape[1])
+            input_frame = cv2.resize(input_frame, (new_width, MAX_DETECTION_HEIGHT))
+        else:
+            scale_factor = 1
+
+        self.face_detector.setInputSize((input_frame.shape[1], input_frame.shape[0]))
+        faces = self.face_detector.detect(input_frame)
+
+        if faces is None or faces[1] is None:
+            return None
+
+        face = None
+
+        for potential_face in faces[1]:
+            if potential_face[-1] < threshold:
+                continue
+
+            raw_bbox = potential_face[0:4].astype(np.uint16)
+            x: int = int(max(raw_bbox[0], 0) / scale_factor)
+            y: int = int(max(raw_bbox[1], 0) / scale_factor)
+            w: int = int(raw_bbox[2] / scale_factor)
+            h: int = int(raw_bbox[3] / scale_factor)
+            bbox = (x, y, x + w, y + h)
+
+            if face is None or area(bbox) > area(face):
+                face = bbox
+
+        return face
+
+
+class OnnxFaceDetector(FaceDetectorApi):
+    def __init__(self, detector_config: FaceDetectionModelConfig):
+        if not detector_config.path:
+            raise ValueError("Custom ONNX face detector requires a configured path.")
+
+        if not os.path.exists(detector_config.path):
+            raise FileNotFoundError(
+                f"Custom face detector model was not found: {detector_config.path}"
+            )
+
+        model_config = ModelConfig(
+            path=detector_config.path,
+            labelmap_path=None,
+            labelmap={detector_config.class_id: "face"},
+            width=detector_config.width,
+            height=detector_config.height,
+            input_tensor=detector_config.input_tensor,
+            input_pixel_format=detector_config.input_pixel_format,
+            input_dtype=detector_config.input_dtype,
+            model_type=ModelTypeEnum(detector_config.model_type.value),
+        )
+        self.model_config = model_config
+        self.class_id = detector_config.class_id
+        self.input_transform = tensor_transform(model_config.input_tensor)
+        self.input_dtype = model_config.input_dtype
+        self.input_pixel_format = model_config.input_pixel_format
+        self.detector = ONNXDetector(
+            ONNXDetectorConfig(
+                type="onnx",
+                device=detector_config.device or "AUTO",
+                model=model_config,
+            )
+        )
+
+    def _transform_input(self, tensor_input: np.ndarray) -> np.ndarray:
+        if self.input_transform:
+            tensor_input = np.transpose(tensor_input, self.input_transform)
+
+        if self.input_dtype == InputDTypeEnum.float:
+            tensor_input = tensor_input.astype(np.float32)
+            tensor_input /= 255
+        elif self.input_dtype == InputDTypeEnum.float_denorm:
+            tensor_input = tensor_input.astype(np.float32)
+
+        return tensor_input
+
+    def detect(
+        self, input_frame: np.ndarray, threshold: float
+    ) -> tuple[int, int, int, int] | None:
+        original_height, original_width = input_frame.shape[:2]
+
+        if self.input_pixel_format == PixelFormatEnum.rgb:
+            detector_input = input_frame
+        elif self.input_pixel_format == PixelFormatEnum.bgr:
+            detector_input = cv2.cvtColor(input_frame, cv2.COLOR_RGB2BGR)
+        else:
+            raise ValueError(
+                "Custom face detector models currently support only RGB or BGR pixel formats."
+            )
+
+        if detector_input.shape[:2] != (
+            self.model_config.height,
+            self.model_config.width,
+        ):
+            detector_input = cv2.resize(
+                detector_input,
+                dsize=(self.model_config.width, self.model_config.height),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
+        tensor_input = np.expand_dims(detector_input, axis=0)
+        tensor_input = self._transform_input(tensor_input)
+        detections = self.detector.detect_raw(tensor_input)
+
+        face = None
+
+        for detection in detections:
+            class_id = int(detection[0])
+            score = float(detection[1])
+
+            if score < threshold:
+                continue
+
+            if class_id != self.class_id:
+                continue
+
+            x1 = int(max(0.0, detection[3]) * original_width)
+            y1 = int(max(0.0, detection[2]) * original_height)
+            x2 = int(min(1.0, detection[5]) * original_width)
+            y2 = int(min(1.0, detection[4]) * original_height)
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            bbox = (x1, y1, x2, y2)
+
+            if face is None or area(bbox) > area(face):
+                face = bbox
+
+        return face
+
+
 class FaceRealTimeProcessor(RealTimeProcessorApi):
     def __init__(
         self,
@@ -52,8 +222,10 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         self.face_config = config.face_recognition
         self.requestor = requestor
         self.sub_label_publisher = sub_label_publisher
-        self.face_detector: cv2.FaceDetectorYN = None
-        self.requires_face_detection = "face" not in self.config.objects.all_objects
+        self.face_detector: FaceDetectorApi | None = None
+        self.requires_face_detection = bool(self.face_config.detector.path) or (
+            "face" not in self.config.objects.all_objects
+        )
         self.person_face_history: dict[str, list[tuple[str, float, int]]] = {}
         self.camera_current_people: dict[str, list[str]] = {}
         self.recognizer: FaceRecognizer | None = None
@@ -64,26 +236,37 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
 
         download_path = os.path.join(MODEL_CACHE_DIR, "facedet")
         self.model_files = {
-            "facedet.onnx": f"{GITHUB_ENDPOINT}/NickM-27/facenet-onnx/releases/download/v1.0/facedet.onnx",
             "landmarkdet.yaml": f"{GITHUB_ENDPOINT}/NickM-27/facenet-onnx/releases/download/v1.0/landmarkdet.yaml",
         }
 
-        if not all(
-            os.path.exists(os.path.join(download_path, n))
-            for n in self.model_files.keys()
-        ):
+        if self._uses_builtin_yunet_detector():
+            self.model_files["facedet.onnx"] = (
+                f"{GITHUB_ENDPOINT}/NickM-27/facenet-onnx/releases/download/v1.0/facedet.onnx"
+            )
+
+        missing_files = [
+            file_name
+            for file_name in self.model_files.keys()
+            if not os.path.exists(os.path.join(download_path, file_name))
+        ]
+
+        self.downloader = None
+        if missing_files:
             # conditionally import ModelDownloader
             from frigate.util.downloader import ModelDownloader
 
             self.downloader = ModelDownloader(
                 model_name="facedet",
                 download_path=download_path,
-                file_names=self.model_files.keys(),
+                file_names=missing_files,
                 download_func=self.__download_models,
-                complete_func=self.__build_detector,
+                complete_func=self.__build_detector
+                if self._uses_builtin_yunet_detector()
+                else None,
             )
             self.downloader.ensure_model_files()
-        else:
+
+        if not missing_files or not self._uses_builtin_yunet_detector():
             self.__build_detector()
 
         self.label_map: dict[int, str] = {}
@@ -105,12 +288,23 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         previous_min_area = self.config.face_recognition.min_area
         self.config.face_recognition = payload
         self.face_config = payload
+        self.requires_face_detection = bool(self.face_config.detector.path) or (
+            "face" not in self.config.objects.all_objects
+        )
 
         for camera_config in self.config.cameras.values():
             if camera_config.face_recognition.min_area == previous_min_area:
                 camera_config.face_recognition.min_area = payload.min_area
 
+        self.__build_detector()
         logger.debug("Face recognition config updated dynamically")
+
+    def _uses_builtin_yunet_detector(self) -> bool:
+        detector_config = self.face_config.detector
+        return (
+            detector_config.model_type == FaceDetectionModelTypeEnum.yunet
+            and not detector_config.path
+        )
 
     def __download_models(self, path: str) -> None:
         try:
@@ -123,13 +317,21 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
             logger.error(f"Failed to download {path}: {e}")
 
     def __build_detector(self) -> None:
-        self.face_detector = cv2.FaceDetectorYN.create(
-            os.path.join(MODEL_CACHE_DIR, "facedet/facedet.onnx"),
-            config="",
-            input_size=(320, 320),
-            score_threshold=0.5,
-            nms_threshold=0.3,
-        )
+        detector_config = self.face_config.detector
+        self.face_detector = None
+
+        if detector_config.model_type == FaceDetectionModelTypeEnum.yunet:
+            model_path = detector_config.path or os.path.join(
+                MODEL_CACHE_DIR, "facedet/facedet.onnx"
+            )
+            if not os.path.exists(model_path):
+                logger.debug("Face detector model is not available yet.")
+                return
+
+            self.face_detector = YuNetFaceDetector(model_path)
+        else:
+            self.face_detector = OnnxFaceDetector(detector_config)
+
         self.faces_per_second.start()
 
     def __detect_face(
@@ -138,40 +340,7 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         """Detect faces in input image."""
         if not self.face_detector:
             return None
-
-        # YN face detector fails at extreme definitions
-        # this rescales to a size that can properly detect faces
-        # still retaining plenty of detail
-        if input.shape[0] > MAX_DETECTION_HEIGHT:
-            scale_factor = MAX_DETECTION_HEIGHT / input.shape[0]
-            new_width = int(scale_factor * input.shape[1])
-            input = cv2.resize(input, (new_width, MAX_DETECTION_HEIGHT))
-        else:
-            scale_factor = 1
-
-        self.face_detector.setInputSize((input.shape[1], input.shape[0]))
-        faces = self.face_detector.detect(input)
-
-        if faces is None or faces[1] is None:
-            return None
-
-        face = None
-
-        for _, potential_face in enumerate(faces[1]):
-            if potential_face[-1] < threshold:
-                continue
-
-            raw_bbox = potential_face[0:4].astype(np.uint16)
-            x: int = int(max(raw_bbox[0], 0) / scale_factor)
-            y: int = int(max(raw_bbox[1], 0) / scale_factor)
-            w: int = int(raw_bbox[2] / scale_factor)
-            h: int = int(raw_bbox[3] / scale_factor)
-            bbox = (x, y, x + w, y + h)
-
-            if face is None or area(bbox) > area(face):
-                face = bbox
-
-        return face
+        return self.face_detector.detect(input, threshold)
 
     def __update_metrics(self, duration: float) -> None:
         self.faces_per_second.update()

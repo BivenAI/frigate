@@ -108,6 +108,54 @@ class TestConfig(unittest.TestCase):
         assert frigate_config.detectors["edgetpu"].model.path == "/edgetpu_model.tflite"
         assert frigate_config.detectors["openvino"].model.path == "/etc/hosts"
 
+    def test_face_recognition_custom_onnx_detector_config(self):
+        config = deep_merge(
+            self.minimal,
+            {
+                "face_recognition": {
+                    "enabled": True,
+                    "detector": {
+                        "path": "/config/model_cache/yolo-face.onnx",
+                        "model_type": "yolo-generic",
+                        "width": 640,
+                        "height": 640,
+                        "input_tensor": "nchw",
+                        "input_pixel_format": "rgb",
+                        "input_dtype": "float",
+                        "class_id": 0,
+                        "device": "CPU",
+                    },
+                }
+            },
+        )
+
+        frigate_config = FrigateConfig(**config)
+
+        assert frigate_config.face_recognition.detector.path == (
+            "/config/model_cache/yolo-face.onnx"
+        )
+        assert frigate_config.face_recognition.detector.model_type.value == (
+            "yolo-generic"
+        )
+        assert frigate_config.face_recognition.detector.width == 640
+        assert frigate_config.face_recognition.detector.input_tensor.value == "nchw"
+        assert frigate_config.face_recognition.detector.input_dtype.value == "float"
+
+    def test_face_recognition_custom_detector_requires_path(self):
+        config = deep_merge(
+            self.minimal,
+            {
+                "face_recognition": {
+                    "enabled": True,
+                    "detector": {
+                        "model_type": "yolo-generic",
+                    },
+                }
+            },
+        )
+
+        self.assertRaises(ValidationError, lambda: FrigateConfig(**config))
+
     def test_invalid_mqtt_config(self):
         config = {
             "mqtt": {"host": "mqtt", "user": "test"},

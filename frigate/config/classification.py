@@ -1,11 +1,19 @@
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
+
+from frigate.detectors.detector_config import (
+    InputDTypeEnum,
+    InputTensorEnum,
+    ModelTypeEnum,
+    PixelFormatEnum,
+)
 
 from .base import FrigateBaseModel
 
 __all__ = [
+    "FaceDetectionModelConfig",
     "CameraFaceRecognitionConfig",
     "CameraLicensePlateRecognitionConfig",
     "CameraAudioTranscriptionConfig",
@@ -40,6 +48,72 @@ class TriggerAction(str, Enum):
 class ObjectClassificationType(str, Enum):
     sub_label = "sub_label"
     attribute = "attribute"
+
+
+class FaceDetectionModelTypeEnum(str, Enum):
+    yunet = "yunet"
+    dfine = ModelTypeEnum.dfine.value
+    rfdetr = ModelTypeEnum.rfdetr.value
+    yolox = ModelTypeEnum.yolox.value
+    yolonas = ModelTypeEnum.yolonas.value
+    yologeneric = ModelTypeEnum.yologeneric.value
+
+
+class FaceDetectionModelConfig(FrigateBaseModel):
+    path: Optional[str] = Field(
+        default=None,
+        title="Face detector model path",
+        description="Filesystem path to a custom face detection model. If unset, Frigate uses its built-in YuNet detector.",
+    )
+    model_type: FaceDetectionModelTypeEnum = Field(
+        default=FaceDetectionModelTypeEnum.yunet,
+        title="Face detector model type",
+        description="Detection model runtime type. Use 'yunet' for OpenCV FaceDetectorYN-compatible models or an ONNX detector type such as 'yolo-generic' for custom ONNX models.",
+    )
+    width: int = Field(
+        default=320,
+        title="Face detector input width",
+        description="Width of the custom ONNX face detector input tensor in pixels.",
+    )
+    height: int = Field(
+        default=320,
+        title="Face detector input height",
+        description="Height of the custom ONNX face detector input tensor in pixels.",
+    )
+    input_tensor: InputTensorEnum = Field(
+        default=InputTensorEnum.nhwc,
+        title="Face detector input tensor shape",
+        description="Tensor format expected by the custom ONNX face detector.",
+    )
+    input_pixel_format: PixelFormatEnum = Field(
+        default=PixelFormatEnum.rgb,
+        title="Face detector input pixel format",
+        description="Pixel color format expected by the custom ONNX face detector.",
+    )
+    input_dtype: InputDTypeEnum = Field(
+        default=InputDTypeEnum.int,
+        title="Face detector input dtype",
+        description="Data type expected by the custom ONNX face detector input tensor.",
+    )
+    class_id: int = Field(
+        default=0,
+        title="Face detector class id",
+        description="Class id to treat as a face when using a custom ONNX detection model.",
+        ge=0,
+    )
+    device: Optional[str] = Field(
+        default=None,
+        title="Face detector device",
+        description="Optional device override for the custom ONNX face detector. Defaults to AUTO.",
+    )
+
+    @model_validator(mode="after")
+    def validate_custom_model_requirements(self):
+        if self.model_type != FaceDetectionModelTypeEnum.yunet and not self.path:
+            raise ValueError(
+                "face_recognition.detector.path is required when using a custom ONNX face detector."
+            )
+        return self
 
 
 class AudioTranscriptionConfig(FrigateBaseModel):
@@ -241,6 +315,11 @@ class FaceRecognitionConfig(FrigateBaseModel):
         default=False,
         title="Enable face recognition",
         description="Enable or disable face recognition for all cameras; can be overridden per-camera.",
+    )
+    detector: FaceDetectionModelConfig = Field(
+        default_factory=FaceDetectionModelConfig,
+        title="Face detector",
+        description="Face detector settings. Leave unset to use Frigate's built-in YuNet detector, or provide a custom model path and metadata for ONNX-based detectors such as YOLO.",
     )
     model_size: str = Field(
         default="small",

@@ -12,6 +12,7 @@ const faceRecognition: SectionConfigOverrides = {
   global: {
     fieldOrder: [
       "enabled",
+      "detector",
       "model_size",
       "unknown_score",
       "detection_threshold",
@@ -23,6 +24,7 @@ const faceRecognition: SectionConfigOverrides = {
       "device",
     ],
     advancedFields: [
+      "detector",
       "unknown_score",
       "detection_threshold",
       "recognition_threshold",
@@ -32,7 +34,7 @@ const faceRecognition: SectionConfigOverrides = {
       "blur_confidence_filter",
       "device",
     ],
-    restartRequired: ["enabled", "model_size", "device"],
+    restartRequired: ["enabled", "detector", "model_size", "device"],
   },
 };
 
