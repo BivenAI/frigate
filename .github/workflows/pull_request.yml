@@ -14,7 +14,7 @@ env:
 jobs:
   web_lint:
     name: Web - Lint
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
         with:
@@ -30,7 +30,7 @@ jobs:
 
   web_test:
     name: Web - Test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,7 +48,7 @@ jobs:
       #   working-directory: ./web
 
   python_checks:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     name: Python Checks
     steps:
       - name: Check out the repository
@@ -71,7 +71,7 @@ jobs:
           ruff check frigate migrations docker *.py
 
   python_tests:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     name: Python Tests
     steps:
       - name: Check out code
