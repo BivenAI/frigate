@@ -290,6 +290,61 @@
       "label": "Detector Type",
       "description": "Type of detector to use for object detection (for example 'cpu', 'edgetpu', 'openvino')."
     },
+    "axengine": {
+      "label": "AXEngine NPU",
+      "description": "AXERA AX650N/AX8850N NPU detector running compiled .axmodel files via the AXEngine runtime.",
+      "type": {
+        "label": "Type"
+      },
+      "model": {
+        "label": "Detector specific model configuration",
+        "description": "Detector-specific model configuration options (path, input size, etc.).",
+        "path": {
+          "label": "Custom Object detection model path",
+          "description": "Path to a custom detection model file (or plus://<model_id> for Frigate+ models)."
+        },
+        "labelmap_path": {
+          "label": "Label map for custom object detector",
+          "description": "Path to a labelmap file that maps numeric classes to string labels for the detector."
+        },
+        "width": {
+          "label": "Object detection model input width",
+          "description": "Width of the model input tensor in pixels."
+        },
+        "height": {
+          "label": "Object detection model input height",
+          "description": "Height of the model input tensor in pixels."
+        },
+        "labelmap": {
+          "label": "Labelmap customization",
+          "description": "Overrides or remapping entries to merge into the standard labelmap."
+        },
+        "attributes_map": {
+          "label": "Map of object labels to their attribute labels",
+          "description": "Mapping from object labels to attribute labels used to attach metadata (for example 'car' -> ['license_plate'])."
+        },
+        "input_tensor": {
+          "label": "Model Input Tensor Shape",
+          "description": "Tensor format expected by the model: 'nhwc' or 'nchw'."
+        },
+        "input_pixel_format": {
+          "label": "Model Input Pixel Color Format",
+          "description": "Pixel colorspace expected by the model: 'rgb', 'bgr', or 'yuv'."
+        },
+        "input_dtype": {
+          "label": "Model Input D Type",
+          "description": "Data type of the model input tensor (for example 'float32')."
+        },
+        "model_type": {
+          "label": "Object Detection Model Type",
+          "description": "Detector model architecture type (ssd, yolox, yolonas) used by some detectors for optimization."
+        }
+      },
+      "model_path": {
+        "label": "Detector specific model path",
+        "description": "File path to the detector model binary if required by the chosen detector."
+      }
+    },
     "cpu": {
       "label": "CPU",
       "description": "CPU TFLite detector that runs TensorFlow Lite models on the host CPU without hardware acceleration. Not recommended.",
@@ -1119,7 +1174,7 @@
     }
   },
   "genai": {
-    "label": "Generative AI configuration (named providers).",
+    "label": "Generative AI configuration",
     "description": "Settings for integrated generative AI providers used to generate object descriptions and review summaries.",
     "api_key": {
       "label": "API key",
@@ -1238,8 +1293,8 @@
     "label": "Object Detection",
     "description": "Settings for the detection/detect role used to run object detection and initialize trackers.",
     "enabled": {
-      "label": "Detection enabled",
-      "description": "Enable or disable object detection for all cameras; can be overridden per-camera. Detection must be enabled for object tracking to run."
+      "label": "Enable object detection",
+      "description": "Enable or disable object detection for all cameras; can be overridden per-camera."
     },
     "height": {
       "label": "Detect height",
@@ -1395,7 +1450,7 @@
     },
     "skip_motion_threshold": {
       "label": "Skip motion threshold",
-      "description": "If more than this fraction of the image changes in a single frame, the detector will return no motion boxes and immediately recalibrate. This can save CPU and reduce false positives during lightning, storms, etc., but may miss real events such as a PTZ camera auto‑tracking an object. The trade‑off is between dropping a few megabytes of recordings versus reviewing a couple short clips. Range 0.0 to 1.0."
+      "description": "If set to a value between 0.0 and 1.0, and more than this fraction of the image changes in a single frame, the detector will return no motion boxes and immediately recalibrate. This can save CPU and reduce false positives during lightning, storms, etc., but may miss real events such as a PTZ camera auto‑tracking an object. The trade‑off is between dropping a few megabytes of recordings versus reviewing a couple short clips. Leave unset (None) to disable this feature."
     },
     "improve_contrast": {
       "label": "Improve contrast",
@@ -1723,7 +1778,7 @@
     "label": "Snapshots",
     "description": "Settings for saved JPEG snapshots of tracked objects for all cameras; can be overridden per-camera.",
     "enabled": {
-      "label": "Snapshots enabled",
+      "label": "Enable snapshots",
       "description": "Enable or disable saving snapshots for all cameras; can be overridden per-camera."
     },
     "clean_copy": {
@@ -1907,8 +1962,8 @@
       "description": "Trigger a full reindex of historical tracked objects into the embeddings database."
     },
     "model": {
-      "label": "Semantic search model",
-      "description": "The embeddings model to use for semantic search (for example 'jinav1')."
+      "label": "Semantic search model or GenAI provider name",
+      "description": "The embeddings model to use for semantic search (for example 'jinav1'), or the name of a GenAI provider with the embeddings role."
     },
     "model_size": {
       "label": "Model size",
@@ -2072,6 +2127,18 @@
       "label": "Sort order",
       "description": "Numeric order used to sort camera groups in the UI; larger numbers appear later."
     }
+  },
+  "profiles": {
+    "label": "Profiles",
+    "description": "Named profile definitions with friendly names. Camera profiles must reference names defined here.",
+    "friendly_name": {
+      "label": "Friendly name",
+      "description": "Display name for this profile shown in the UI."
+    }
+  },
+  "active_profile": {
+    "label": "Active profile",
+    "description": "Currently active profile name. Runtime-only, not persisted in YAML."
   },
   "camera_mqtt": {
     "label": "MQTT",
