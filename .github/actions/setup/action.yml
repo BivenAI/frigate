@@ -13,11 +13,13 @@ runs:
   steps:
     # Stop docker so we can mount more space at /var/lib/docker
     - name: Stop docker
+      if: runner.arch != 'ARM64'
       run: sudo systemctl stop docker
       shell: bash
     # This creates a virtual volume at /var/lib/docker to maximize the size
     # As of 2/14/2024, this results in 97G for docker images
     - name: Maximize build space
+      if: runner.arch != 'ARM64'
       uses: easimon/maximize-build-space@master
       with:
         remove-dotnet: 'true'
@@ -26,6 +28,7 @@ runs:
         remove-codeql: 'true'
         build-mount-path: '/var/lib/docker'
     - name: Start docker
+      if: runner.arch != 'ARM64'
       run: sudo systemctl start docker
       shell: bash
     - id: lowercaseRepo
