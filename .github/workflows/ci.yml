@@ -9,6 +9,10 @@ on:
     paths-ignore:
       - "docs/**"
 
+permissions:
+  contents: read
+  packages: write
+
 # only run the latest commit to avoid cache overwrites
 concurrency:
   group: ${{ github.ref }}
@@ -72,8 +76,6 @@ jobs:
           files: docker/rpi/rpi.hcl
           set: |
             rpi.tags=${{ steps.setup.outputs.image-name }}-rpi
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64,mode=max
   jetson_jp6_build:
     runs-on: blacksmith-8vcpu-ubuntu-2204-arm
     name: Jetson Jetpack 6
@@ -101,8 +103,6 @@ jobs:
           files: docker/tensorrt/trt.hcl
           set: |
             tensorrt.tags=${{ steps.setup.outputs.image-name }}-tensorrt-jp6
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6,mode=max
   amd64_extra_builds:
     runs-on: blacksmith-8vcpu-ubuntu-2204
     name: AMD64 Extra Build
